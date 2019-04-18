@@ -1,0 +1,527 @@
+---
+title: 'Optical character recognition (OCR)'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+    number_sections: true
+    code_folding: hide
+---
+
+
+
+GU4243/GR5243: Applied Data Science
+
+Group11
+
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  color: Black;
+}
+h1 { /* Header 1 */
+  font-size: 24px;
+  color: Black;
+}
+h2 { /* Header 2 */
+  font-size: 20px;
+  color: Black;
+}
+h3 { /* Header 3 */
+  font-size: 16px;
+  color: Black;
+}
+h4 { /* Header 4 */
+  font-size: 14px;
+  color: Grey;
+}
+</style>
+# Introduction {-}
+
+Optical character recognition (OCR) is the process of converting scanned images of machine printed or
+handwritten text (numerals, letters, and symbols), into machine readable character streams, plain (e.g. text files) or formatted (e.g. HTML files). As shown in Figure 1, the data *workflow* in a typical OCR system consists of three major stages:
+
+* Pre-processing
+
+* Word recognition
+
+* Post-processing
+
+![](../figs/ocr_flowchart.png) 
+
+We have processed raw scanned images through the first two steps are relying on the [Tessearct OCR machine](https://en.wikipedia.org/wiki/Tesseract_(software)). R package tutorial can be found [here](https://www.r-bloggers.com/the-new-tesseract-package-high-quality-ocr-in-r/). 
+
+BUT this is not the FOCUS of this project!!!
+
+In this project, we are going to **focus on the third stage -- post-processing**, which includes two tasks: *error detection* and *error correction*.  
+
+# Step 1 - Load library 
+```{r load lib, warning=FALSE, message = FALSE}
+if (!require("pacman")) {
+  library(devtools)
+  install_github("trinker/pacman")
+}
+
+# install packages
+packages.used <- c("devtools","dplyr","vwr", "utils")
+packages.needed <- setdiff(packages.used, intersect(installed.packages()[,1], packages.used))
+if(length(packages.needed)>0) {
+  install.packages(packages.needed, dependencies = TRUE)
+  }
+
+library(dplyr)
+library(vwr)
+library(utils)
+pacman::p_load(knitr, readr, stringr, tesseract, vecsets)
+
+
+
+file_name_vec <- list.files("../data/ground_truth") #100 files in total
+ground_filename <- list.files("../data/ground_truth_cut") 
+```
+
+# Step 2 - Read the files and conduct Tesseract OCR
+
+Although we have processed the Tesseract OCR and save the output txt files in the `data` folder, we include this chunk of code in order to make clear the whole pipeline to you.
+
+```{r, eval=FALSE}
+for(i in c(1:length(file_name_vec))){
+  current_file_name <- sub(".txt","",file_name_vec[i])
+  ## png folder is not provided on github (the code is only for demonstration purpose)
+  current_tesseract_txt <- tesseract::ocr(paste("../data/png/",current_file_name,".png",sep=""))
+  
+  ### clean the tessetact text (separate line by "\n", delete null string, transter to lower case)
+  clean_tesseract_txt <- strsplit(current_tesseract_txt,"\n")[[1]]
+  clean_tesseract_txt <- clean_tesseract_txt[clean_tesseract_txt!=""]
+  
+  ### save tesseract text file
+  writeLines(clean_tesseract_txt, paste("../data/tesseract/",current_file_name,".txt",sep=""))
+}
+```
+
+# Step 3 - Error detection
+
+Now, we are ready to conduct post-processing, based on the Tessearct OCR output. First of all, we need to detect errors, or *incorrectly processed words* -- check to see if an input string is a valid dictionary word or if its n-grams are all legal.
+
+Paper: D1
+
+Here we followed the paper and implemented the rule-based methodology.
+```{r, warning=FALSE, message = FALSE}
+source("../lib/finding_mismatch.R")
+source("../lib/detect.R")
+
+# creating initial variables
+total_ground_truth <- list()
+total_tesseract <- list()
+total_mismatch <- list()
+detection_output <- list()
+final_detect_output <- list()
+final_tesseract_clean_output <- list()
+total_mismatch_100 <- matrix(NA, nrow = length(ground_filename), ncol = 2)
+
+len_check = rep(NA, 100)
+len_check2 = rep(NA, 100)
+
+file_name <- list.files("../data/ground_truth")
+
+# trimming files
+for (i in 1:length(file_name)){
+ original_file <- sub(".txt","",file_name[i])
+ ## read the ground truth text
+ original_ground_truth <- readLines(paste("../data/ground_truth/",original_file,".txt",sep=""), warn=FALSE)
+ ## read the tesseract text
+ original_tesseract <- readLines(paste("../data/tesseract/",original_file,".txt",sep=""), warn=FALSE)
+ len_check[i] = length(original_ground_truth) == length(original_tesseract)
+ len_check2[i] = length(original_ground_truth) >= length(original_tesseract)
+}
+
+#check which file length is not matching 
+which(!len_check) 
+which(!len_check2)
+length(file_name)-sum(len_check)
+```
+
+```{r}
+for (k in 1:length(ground_filename)){
+  current_file <- sub(".txt","",ground_filename[k])
+  ## read the ground truth text
+  current_ground_truth <- readLines(paste("../data/ground_truth_cut/",current_file,".txt",sep=""), warn=FALSE)
+  ## read the tesseract text
+  current_tesseract <- readLines(paste("../data/tesseract/",current_file,".txt",sep=""), warn=FALSE)
+  
+  ## Trim punctuations and zeros
+  current_ground_truth <- gsub('[[:punct:]]+','',current_ground_truth)
+  current_ground_truth <- trimws(current_ground_truth, which = "both")
+  current_tesseract <- gsub('[[:punct:]]+','',current_tesseract)
+  current_tesseract <- trimws(current_tesseract, which = "both")
+  
+  ## Find mismatching lines
+  mismatch_info <- finding_mismatch(tess = current_tesseract, grdth = current_ground_truth)
+  
+  ## Save into List
+  total_tesseract[[k]] <- current_tesseract
+  total_ground_truth[[k]] <- current_ground_truth
+  total_mismatch[[k]] <- mismatch_info
+}
+
+```
+
+```{r, eval=F}
+#There are thirteen text files in which the total number of lines do not match ###
+#between their corresponding ground_truth and tesseract files. So we manually trimmed the lines in the ground_truth files                  
+  
+  ## Check mismatches in terms of article's total number of rows
+  for (k in 1:length(ground_filename)){
+    total_mismatch_100[k,1] <- length(total_tesseract[[k]])
+    total_mismatch_100[k,2] <- length(total_ground_truth[[k]])
+  }
+  ## Ensuring that all files match now
+  sum(total_mismatch_100[,1]==total_mismatch_100[,2]) == 100
+  
+  ## Locating index of ground truth text
+  ## 1. if the number of words in corresponding row (between tesseract and ground_truth) are equal,
+  ## locate the ground truth word by indexing directly
+  ## 2. if the number of words in corresponding row are not equal, extract previous and following 2 
+  ## words of the error word (5 index in total), and apply string-distance function (stringdist) 
+  ## to locate the most likely ground truth word.
+  
+  for (k in 1:length(ground_filename)){
+    current_d1_output <- detect(current_tesseract = total_tesseract[[k]],
+                                        current_ground_truth = total_ground_truth[[k]],
+                                        mismatch_info = total_mismatch[[k]])
+    empty_index <- which(current_d1_output[[1]][,1] == "" | current_d1_output[[1]][,2] == "")
+      if(length(empty_index)>0){
+        final_detect_output[[k]] <- current_d1_output[[1]][-empty_index,]
+       }
+    final_tesseract_clean_output[[k]] <- current_d1_output[[2]]
+  }
+
+#save(total_tesseract, file="../output/total_tesseract.RData")
+#save(total_ground_truth, file="../output/total_ground_truth.RData")
+#save(, file="../output/final_detect_output.RData")
+#save(final_tesseract_clean_output, file="../output/final_tesseract_clean_output.RData")
+  
+```
+
+# Step 4 - Error correction
+
+Given the detected word error, in order to find the best correction, we need to generating the candidate corrections: a dictionary or a database of legal n-grams to locate one or more potential correction terms. Then we need invoke some lexical-similarity measure between the misspelled string and the candidates or a probabilistic estimate of the likelihood of the correction to rank order the candidates.
+
+The referenced paper is: C3
+[Probability scoring without context](https://link.springer.com/content/pdf/10.1007%2FBF01889984.pdf)
+
+
+## Step 4.1 - train test split
+```{r}
+readfile <- function(file_name){
+  readLines(paste("../data/ground_truth/",file_name,sep=""), warn=FALSE)
+}
+
+#read the ground truth text
+ground_truth_text <- lapply(file_name_vec, readfile)
+
+set.seed(0)
+
+#sample the training set. Eighty files weighted by group
+df <- data.frame(file_index = 1:100, group = c(rep(1, 10), rep(2, 28), rep(3, 3), rep(4, 27), rep(5, 32)))
+sample <- sample_n(df, size = 80, weight = group, replace = F)
+
+#index of trainning set
+train_index <- sort(sample$file_index)
+
+#select train_ground_truth
+train_truth_text <- unlist(ground_truth_text[train_index])
+train_truth_text_vec <- unlist(str_split(train_truth_text, " "))
+```
+
+## Step 4.2 - Choose candiates
+```{r}
+source('../lib/candidate.R')
+source('../lib/prior.R')
+source('../lib/channel_prob.R')
+source('../lib/score.R')
+source('../lib/perform_correction.R')
+```
+
+```{r}
+# create a dictionary containing all legal words
+candidate_dict<- unique(tolower(english.words))
+
+# show candidates the chosen word for the typo: "acress" 
+acress_candidate <- choose_candidate("acress")
+sapply(acress_candidate, type_of_typo, "acress")
+```
+
+## Step 4.3 - Test the functions built for probability scoring
+
+The probability scoring $score = Pr(c) Pr(typo|cor)$ 
+
+* Prior probability $Pr(c)$:
+
+    + frequency is estimated by frequency of words in the training set.
+    + Use ELE estimation: $Pr(c)=(freq(c) + 0.5)/(N + V/2)$ deal with the problem that MLE performs poorly when observed freqency of a word is zero, where
+        
+        1. $freq(c)$; the frequency of the proposed correction c in the training corpus
+        2. N: the total number of words
+        3. V: the vocabulary size
+
+
+### Step 4.3.1 - Prior probability
+```{r}
+priors <- prior_prob(train_truth_text_vec)
+priors_mle <- prior_prob(train_truth_text, method = "mle")
+
+#calculate the prior probability of the typo "acress" using MLE
+sort(unlist(priors_mle[acress_candidate]))
+
+#calculate the prior probability of the typo "acress" using ELE 
+sort(unlist(priors[acress_candidate]))
+```
+
+We choose to use ELE method, since MLE is poor when observed frequency of a certain word is 0.
+
+### Step 4.3.2 - Channel probability
+
+* Channel probability $Pr(typo|cor)$:
+
+    + four confusion matrices are provided (Church and Gale, 1991):
+        a. del[x, y]: the number of times that the characters 'xy' (in the correct word) were typed as 'x'
+        b. add[x, y]: the number of times that 'x' was typed as 'xy'
+        c. sub[x, y]: the number of times that 'y' was typed as 'x'
+        d. rev[x, y]: the number of times that 'xy' was typed as 'yx'
+    + chars[x, y] and chars[x]: the number of time that 'xy' and 'x'appear in the trainning set is calculated
+        
+        \begin{equation}
+        Pr(t|c) =
+        \begin{cases}
+        del[c_{p_1}, c_p]/chars[c_{p-1}, c_p] & \text{if deletion}\\
+        add[c_{p_1}, t_p]/chars[c_{p-1}] & \text{if insertion}\\
+        sub[t_p, c_p]/chars[c_p] & \text{if substitution}\\
+        rev[c_p, c_{p+1}]/chars[c_p, c_{p+1}] & \text{if reversal}
+        \end{cases}       
+        \end{equation}
+
+
+```{r}
+# load 4 confusion matrices in csv format
+del <- read.csv('../data/confusion_matrix/del_matrix.csv')
+add <- read.csv('../data/confusion_matrix/add_matrix.csv')
+sub <- read.csv('../data/confusion_matrix/sub_matrix.csv')
+rev <- read.csv('../data/confusion_matrix/rev_matrix.csv')
+
+#tranform them into matrices
+del.mat <- as.matrix(del[,-1])
+rownames(del.mat) <- del$X
+add.mat <- as.matrix(add[,-1])
+rownames(add.mat) <- add$X
+sub.mat <- as.matrix(sub[,-1])
+rownames(sub.mat) <- sub$X
+rev.mat <- as.matrix(rev[,-1])
+rownames(rev.mat) <- rev$X
+
+#calculate the channel probability of the typo "acress" 
+sapply(acress_candidate, channel_prob, "acress")
+```
+
+
+
+## Step 4.4 - Performing corrections on test files
+```{r detected error correction}
+#load data
+load("../output/total_tesseract.RData")
+load("../output/total_ground_truth.RData")
+load("../output/final_detect_output.RData")
+load("../output/final_tesseract_clean_output.RData")
+
+#clean words in test group
+test_group_clean <- final_tesseract_clean_output[-train_index]
+
+#typo list to be corrected in the test group
+test_group <- final_detect_output[-train_index]
+typo_list <- list()
+for (i in 1:length(test_group)) {
+  typo_list[[i]] <- test_group[[i]]$tesseract_err
+}
+
+# perform correction on typo words
+corrected_list <- rep(list(c()),20)
+typo_type_list <- rep(list(c()),20)
+for(i in 1:20) {
+    current_file <- tolower(typo_list[[i]])
+    correction <- c()
+    typo_type <- c()
+    for (j in current_file){
+      if (grepl("[[:digit:]]",j) | grepl("^[a-zA-Z]$", j) | grepl("ﬂu", j)){
+        correction <- c(correction, j)
+        typo_type <- c(typo_type, NA)
+      }
+      else{
+        correction <- c(correction, perform_correction(j)$correction)
+        typo_type <- c(typo_type, perform_correction(j)$type)
+      }
+      corrected_list[[i]] = correction
+      typo_type_list[[i]] = typo_type
+     }
+}
+
+
+#combine clean words and corrected words
+combine_list <- rep(list(c()), 20)
+for(i in 1:20){
+  combine_list[[i]] <- tolower(c(test_group_clean[[i]], corrected_list[[i]]))
+}
+
+#show some result
+df <- data.frame(typo = test_group[[20]]$tesseract_err, typo_type = typo_type_list[[20]], correction = corrected_list[[20]], ground_truth = test_group[[20]]$ground_truth_err) %>% filter(typo_type %in% c("DEL","INS","SUB","REV"))
+head(df)
+```
+
+We find that most of the typos in OCR are substitution, the most common case is that scanning "i" as "l".
+
+# Step 5 - Performance measure
+
+The two most common OCR accuracy measures are precision and recall. Both are relative measures of the OCR accuracy because they are computed as ratios of the correct output to the total output (precision) or input (recall). More formally defined,
+\begin{align*}
+\mbox{precision}&=\frac{\mbox{number of correct items}}{\mbox{number of items in OCR output}}\\
+\mbox{recall}&=\frac{\mbox{number of correct items}}{\mbox{number of items in ground truth}}
+\end{align*}
+where *items* refer to either characters or words, and ground truth is the original text stored in the plain text file. 
+
+Both *precision* and *recall* are mathematically convenient measures because their numeric values are some decimal fractions in the range between 0.0 and 1.0, and thus can be written as percentages. For instance, recall is the percentage of words in the original text correctly found by the OCR engine, whereas precision is the percentage of correctly found words with respect to the total word count of the OCR output. Note that in the OCR-related literature, the term OCR accuracy often refers to recall.
+
+
+## Step 5.1 - Perform Evaluation
+Finally, we evaluate the performance the algorithms by comparing the word-level and character-level precision and recall. For the number of correct items in the precision and recall functions. We used the following method to calculate: we combine the cleaned words and the corrected words and took the intersection with the ground truth. For character-wise: We split the OCR, corrected list and ground truth into characters, and calculated the intersection between the characters in corrected list and those in ground truth.
+```{r}
+#ground truth txt file without punctutations in the test group
+ground_truth_test <- total_ground_truth[-train_index]
+
+#tesseract file without punctutations in the test group
+OCR_test <- total_tesseract[-train_index]
+
+#split the files into word level
+ground_truth_test_vec <- lapply(ground_truth_test, function(x){tolower(unlist(str_split(x, " ")))})
+OCR_test_vec <- lapply(OCR_test, function(x){tolower(unlist(str_split(x, " ")))})
+```
+
+###Wordwise evaluation
+```{r}
+weights_recall <- lengths(ground_truth_test_vec)/sum(lengths(ground_truth_test_vec))
+weights_prec <- lengths(OCR_test_vec)/sum(lengths(OCR_test_vec))
+#wordwise tesseract recall
+tes_recall <- rep(NA, 20)
+for (i in 1:20){
+tes_recall[i] <- (length(vecsets::vintersect(ground_truth_test_vec[[i]], OCR_test_vec[[i]]))/length(ground_truth_test_vec[[i]])) * weights_recall[i]
+}
+
+tes_recall <- sum(tes_recall)
+
+#wordwise tesseract precsion
+tes_precsion <- rep(NA, 20)
+for (i in 1:20){
+tes_precsion[i] <- (length(vecsets::vintersect(ground_truth_test_vec[[i]], OCR_test_vec[[i]]))/length(OCR_test_vec[[i]])) * weights_recall[i]
+}
+
+tes_precsion <- sum(tes_precsion)
+
+
+#wordwise recall ele
+
+elerecall <- rep(NA, 20)
+for (i in 1:20){
+elerecall[i] <- (length(vecsets::vintersect(ground_truth_test_vec[[i]], combine_list[[i]]))/length(ground_truth_test_vec[[i]])) * weights_recall[i]
+}
+
+
+elerecall <- sum(elerecall)
+
+#wordwise precision ele
+
+eleprecision <- rep(NA, 20)
+for (i in 1:20){
+eleprecision[i] <- (length(vecsets::vintersect(ground_truth_test_vec[[i]], combine_list[[i]]))/length(OCR_test_vec[[i]])) * weights_prec[i]
+}
+
+eleprecision <- sum(eleprecision)
+```
+
+###Character level evaluation
+```{r}
+# character recall for tesseract
+tes_char <- unlist(str_split(unlist(OCR_test_vec), ""))
+ground_char <- unlist(str_split(unlist(ground_truth_test_vec), ""))
+tes_recall_char <- length(vecsets::vintersect(tes_char, ground_char))/ length(ground_char)
+
+
+# character precision for tesseract
+tes_prec_char <- length(vecsets::vintersect(tes_char, ground_char))/ length(tes_char)
+
+
+# character recall for ele
+correction_char <- unlist(str_split(unlist(combine_list), ""))
+ele_recall_char <- length(vecsets::vintersect(correction_char, ground_char))/ length(ground_char)
+
+
+# character precision for ele
+ele_prec_char <- length(vecsets::vintersect(correction_char, ground_char))/ length(tes_char)
+```
+
+## Step 5.2 - Evaluation output
+
+- Word level: The precision and recall of the original Tessearct OCR outputs are 61.51105% and 0.6042648%. With post-processing, both precision and recall increased around 3%. Adopting the idea of garbage detection and probability scoring without contextual constraints can somewhat improve the Tesseract OCR output in terms of correcting words.
+
+- Character level: All lowercase and uppercase letters are considered. The original Tessearct OCR outputs has precision 90.39345% and recall 91.90134%. After post-processing, the results are quite similar to the original ones, with the precision score and the recall both increasing around 0.08%.
+
+```{r}
+OCR_performance_table <- data.frame("Tesseract" = rep(NA,4),
+                                    "Tesseract_with_postprocessing" = rep(NA,4))
+row.names(OCR_performance_table) <- c("word_wise_recall","word_wise_precision",
+                                      "character_wise_recall","character_wise_precision")
+
+OCR_performance_table$Tesseract[1] <- tes_recall
+OCR_performance_table$Tesseract[2] <- tes_precsion
+OCR_performance_table$Tesseract[3] <- tes_recall_char
+OCR_performance_table$Tesseract[4] <- tes_prec_char
+OCR_performance_table$Tesseract_with_postprocessing[1] <- elerecall
+OCR_performance_table$Tesseract_with_postprocessing[2] <- eleprecision
+OCR_performance_table$Tesseract_with_postprocessing[3] <- ele_recall_char
+OCR_performance_table$Tesseract_with_postprocessing[4] <- ele_prec_char
+kable(OCR_performance_table, caption="Summary of OCR performance")
+```
+
+## Step 5.3 - Reflection
+```{r}
+for (i in 1:20){
+df <- rbind(df, data.frame(typo = test_group[[20]]$tesseract_err, typo_type = typo_type_list[[20]], correction = corrected_list[[20]], ground_truth = test_group[[20]]$ground_truth_err) %>% filter(typo_type %in% c("DEL","INS","SUB","REV")))
+}
+
+
+df$success = ifelse(as.vector(df$correction) == as.vector(df$ground_truth), 1, 0)
+df%>% group_by(typo_type) %>% summarise(total_count = n())
+df%>% group_by(typo_type) %>% summarise(success_rate = mean(success))
+```
+
+We find that probability scoring method in paper C3 mainly deals with spelling error, however OCR leads to scanning error. Those two types of errors are internally different. This is the reason why most of our corrections are substitue a charactor with another. The accuracy of substitution is 71.4%.
+
+# References {-}
+
+1. Karpinski, R., Lohani, D., & Belaïd, A. *Metrics for Complete Evaluation of OCR Performance*. [pdf](https://csce.ucmss.com/cr/books/2018/LFS/CSREA2018/IPC3481.pdf)
+
+- section 2.1 Text-to-Text evaluation
+
+2. Mei, J., Islam, A., Wu, Y., Moh'd, A., & Milios, E. E. (2016). *Statistical learning for OCR text correction*. arXiv preprint arXiv:1611.06950. [pdf](https://arxiv.org/pdf/1611.06950.pdf)
+
+- section 5, separate the error detection and correction criterions
+
+3. Belaid, A., & Pierron, L. (2001, December). *Generic approach for OCR performance evaluation*. In Document Recognition and Retrieval IX (Vol. 4670, pp. 203-216). International Society for Optics and Photonics. [pdf](https://members.loria.fr/ABelaid/publis/spie02-belaid-pierron.pdf)
+
+- section 3.2, consider the text alignment
+
+4. Borovikov, E. (2014). *A survey of modern optical character recognition techniques*. arXiv preprint arXiv:1412.4183.[pdf](https://pdfs.semanticscholar.org/79c9/cc90b8c2e2c9c54c3862935ea00df7dd56ed.pdf)
+(This paper is the source of our evaluation criterion)
+
+5. Kukich, K. (1992). *Techniques for automatically correcting words in text*. Acm Computing Surveys (CSUR), 24(4), 377-439. [pdf](http://www.unige.ch/eti/ptt/docs/kukich-92.pdf)
+(This paper is the benchmark review paper).
